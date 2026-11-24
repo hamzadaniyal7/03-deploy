@@ -78,26 +78,33 @@ $ selfserve bench http://localhost:8000 --sweep 1,4,16,32
 
    conc     req/s   out tok/s   TTFT p50   TTFT p99   ITL p50   ITL p99   503s
   ----------------------------------------------------------------------------
-      1      8.35       200.3        37m        42m      3.3m      3.9m      0
-      4     26.87       645.0        49m        52m      4.0m      4.8m      0
-     16     55.54      1333.0        84m       185m      7.0m      8.5m      0
-     32     59.18      1420.4        95m       209m      8.0m     10.8m     91
+      1      0.30        38.4       109m       113m     25.5m     27.3m      0
+      4      1.04       132.8       129m       132m     29.0m     31.3m      0
+     16      2.70       345.2       205m       208m     44.2m     47.2m      0
+     32      3.65       466.9       307m       310m     66.2m     68.3m      0
 
-  peak throughput at concurrency 32: 1420 output tok/s, TTFT p99 209ms
-  versus concurrency 1: 7.1x the throughput for 5.0x the TTFT p99
-  load shedding begins at concurrency 32 (91 rejected)
+  peak throughput at concurrency 32: 467 output tok/s, TTFT p99 310ms
+  versus concurrency 1: 12.2x the throughput for 2.8x the TTFT p99
 ```
 
-Throughput rises 7x. The latency a user feels gets 5x worse. Past 16 the
-throughput gain has nearly stopped and the latency cost has not. **Somewhere
-between 16 and 32 is your operating point**, and no single-number benchmark can
-tell you where it is.
+Throughput rises 12x; the latency a user feels gets under 3x worse. But look at
+where the gain is going: 1 → 16 buys 9x the throughput, and 16 → 32 buys only
+another 1.35x while adding 100ms to TTFT and 50% to every user's reading speed.
+**The knee is somewhere around 16**, and no single-number benchmark can tell you
+that.
 
-*(That run is against the bundled simulator — it illustrates the shape, not
-your hardware. The simulator models contention deliberately: prefill cost grows
-with prompt length and decode slows as the batch grows, because a mock with
-fixed latency produces a straight line and the curve is the entire reason to
-benchmark.)*
+The `503s` column stays at zero because the simulator's default capacity is 32
+concurrent sequences, so this sweep stops exactly at the limit rather than
+crossing it. Push a level past whatever your server can hold and that column
+fills up — which is the other number you are looking for, because it is the
+real capacity and it is what `--max-concurrency` on the gateway should be set
+near.
+
+*(Numbers from the bundled simulator, reproducible with the two commands above
+— they illustrate the shape, not your hardware. The simulator models contention
+deliberately: prefill cost grows with prompt length and decode slows as the
+batch grows, because a mock with fixed latency produces a straight line and the
+curve is the entire reason to benchmark.)*
 
 Two rules the report follows:
 
@@ -121,11 +128,11 @@ $ selfserve probe http://localhost:8000
 
   [ok  ] health endpoint              /health -> 200
   [ok  ] GET /v1/models               mock-8b
-  [ok  ] non-streaming completion     8 tokens in 0.16s
-  [ok  ] streaming completion         24 chunks, first at 0.044s
+  [ok  ] non-streaming completion     8 tokens in 0.26s
+  [ok  ] streaming completion         24 chunks, first at 0.085s
   [ok  ] usage in stream              token counts came from the server
-  [ok  ] chunks arrive incrementally  378ms between first and last chunk
-  [ok  ] round trip                   0.44s
+  [ok  ] chunks arrive incrementally  585ms between first and last chunk
+  [ok  ] round trip                   0.70s
 
   usable
 ```
@@ -192,12 +199,18 @@ before starting anything.
 As a library:
 
 ```python
-from selfserve import plan, get_model, get_gpu
+from selfserve import get_gpu, get_model, plan
 
-capacity = plan(get_model("llama-3.1-70b"), get_gpu("h100"), gpus=4,
-                dtype="awq", context=32768)
+capacity = plan(
+    get_model("llama-3.1-70b"),
+    get_gpu("h100"),
+    gpus=4,
+    dtype="awq",
+    context=32768,
+)
+
 print(capacity.max_sequences, capacity.max_tokens)
-print(capacity.warnings)        # TP divisibility, context overruns, MoE notes
+print(capacity.warnings)  # TP divisibility, context overruns, MoE notes
 ```
 
 ---
@@ -227,7 +240,7 @@ traffic never uses.
 ## Development
 
 ```bash
-pytest                 # 183 tests, no GPU and no API key, ~40s
+pytest                 # 187 tests, no GPU and no API key, ~40s
 ruff check . && ruff format --check .
 ```
 

@@ -31,6 +31,14 @@ class QuietThreadingHTTPServer(ThreadingHTTPServer):
     # Without this, restarting the server on the same port inside a test run
     # fails with EADDRINUSE while the previous socket sits in TIME_WAIT.
     allow_reuse_address = True
+    # socketserver defaults the listen backlog to 5. That is the number of
+    # connections the kernel will hold between arriving and being accepted,
+    # and a benchmark opening 32 at once overruns it -- the OS then refuses
+    # the excess, which surfaces to the client as "connection refused" and
+    # looks exactly like the server having crashed. An inference gateway is
+    # specifically a thing that gets many simultaneous connections, so the
+    # default is wrong here by a wide margin.
+    request_queue_size = 256
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)

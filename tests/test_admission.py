@@ -11,6 +11,21 @@ import pytest
 from selfserve.gateway.admission import AdmissionControl, Rejected, slot
 
 
+def _waits_until(predicate, timeout: float = 5.0) -> bool:
+    """Poll for a condition rather than assuming a thread was scheduled.
+
+    `sleep(0.05); assert waiting == 1` encodes a guess about scheduling
+    latency. On a loaded machine the guess is sometimes wrong, and the test
+    then fails for a reason unrelated to the code under test.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.005)
+    return False
+
+
 def test_admits_up_to_the_limit() -> None:
     admission = AdmissionControl(max_concurrency=3, queue_limit=0)
     for _ in range(3):
@@ -43,8 +58,7 @@ def test_releasing_admits_the_next_waiter() -> None:
 
     thread = threading.Thread(target=waiter)
     thread.start()
-    time.sleep(0.05)
-    assert admission.snapshot()["waiting"] == 1
+    assert _waits_until(lambda: admission.snapshot()["waiting"] == 1)
     admission.release()
     thread.join(timeout=2)
     assert len(got) == 1
@@ -70,7 +84,7 @@ def test_the_queue_itself_is_bounded() -> None:
     threads = [threading.Thread(target=_swallow, args=(admission,)) for _ in range(2)]
     for t in threads:
         t.start()
-    time.sleep(0.1)
+    assert _waits_until(lambda: admission.snapshot()["waiting"] == 2)
     with pytest.raises(Rejected, match="queue full"):
         admission.acquire()
     for _ in range(3):

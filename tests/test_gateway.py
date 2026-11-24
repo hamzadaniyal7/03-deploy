@@ -122,17 +122,36 @@ def test_every_backend_dead_returns_502() -> None:
     assert not result.ok and result.status == 502
 
 
-def test_a_backend_at_capacity_is_not_marked_unhealthy() -> None:
+def test_a_503_does_not_open_the_circuit() -> None:
     """A 503 is the backend working as designed. Opening its circuit would
-    remove capacity exactly when there is not enough."""
+    remove capacity exactly when there is not enough.
+
+    One backend, always full, so which backend gets the request is not a coin
+    flip. The earlier version of this test used a full backend alongside a
+    healthy one and asserted the full one had been offered a request -- with
+    random tie-breaking that is a 1-in-16 bet, and it duly failed about one
+    run in sixteen.
+    """
+    with MockServer(MockConfig(capacity=0)) as full:
+        config = GatewayConfig(backends=[full.url], port=0, max_retries=0)
+        with Gateway(config) as gateway:
+            result = InferenceClient(gateway.url).chat(ChatRequest.of("hi", max_tokens=2))
+            assert result.status == 503
+            assert _settles(gateway, lambda s: s["backends"][0]["rejected"] == 1)
+            busy = gateway.status()["backends"][0]
+            assert busy["healthy"], "shedding load must not count against health"
+            assert busy["failures"] == 0
+
+
+def test_a_full_backend_is_routed_around() -> None:
+    """With somewhere healthy to send them, requests still succeed."""
     with MockServer(MockConfig(capacity=0)) as full, MockServer(FAST) as good:
         config = GatewayConfig(backends=[full.url, good.url], port=0)
         with Gateway(config) as gateway:
             client = InferenceClient(gateway.url)
-            assert all(client.chat(ChatRequest.of("hi", max_tokens=2)).ok for _ in range(4))
-            assert _settles(gateway, lambda s: s["backends"][1]["requests"] == 4)
-            busy = gateway.status()["backends"][0]
-            assert busy["healthy"] and busy["rejected"] > 0 and busy["failures"] == 0
+            assert all(client.chat(ChatRequest.of("hi", max_tokens=2)).ok for _ in range(8))
+            assert _settles(gateway, lambda s: s["backends"][1]["requests"] == 8)
+            assert gateway.status()["backends"][0]["failures"] == 0
 
 
 def test_a_client_error_is_relayed_not_retried(mock: MockServer) -> None:
@@ -181,14 +200,20 @@ def test_the_gateway_sheds_load_past_its_limit() -> None:
 
 
 def test_load_is_spread_across_backends(mock_pair) -> None:
+    """Sequential requests leave both backends idle, so each pick is a coin
+    flip between them. Ten requests gives a 1-in-512 chance of a shutout --
+    small, and over enough CI runs it happens, as it did here. Thirty makes it
+    1-in-500-million while asserting exactly the same property.
+    """
+    requests = 30
     a, b = mock_pair
     with Gateway(GatewayConfig(backends=[a.url, b.url], port=0)) as gateway:
         client = InferenceClient(gateway.url)
-        for _ in range(10):
+        for _ in range(requests):
             client.chat(ChatRequest.of("hi", max_tokens=2))
-        assert _settles(gateway, lambda s: sum(b["requests"] for b in s["backends"]) == 10)
+        assert _settles(gateway, lambda s: sum(bk["requests"] for bk in s["backends"]) == requests)
         counts = [bk["requests"] for bk in gateway.status()["backends"]]
-    assert sum(counts) == 10
+    assert sum(counts) == requests
     assert all(c > 0 for c in counts), f"one backend got nothing: {counts}"
 
 

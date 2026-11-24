@@ -7,23 +7,28 @@ selfserve bench http://localhost:8000 --sweep 1,4,16,64
 ```
    conc     req/s   out tok/s   TTFT p50   TTFT p99   ITL p50   ITL p99   503s
   ----------------------------------------------------------------------------
-      1      8.35       200.3        37m        42m      3.3m      3.9m      0
-      4     26.87       645.0        49m        52m      4.0m      4.8m      0
-     16     55.54      1333.0        84m       185m      7.0m      8.5m      0
-     32     59.18      1420.4        95m       209m      8.0m     10.8m     91
+      1      0.30        38.4       109m       113m     25.5m     27.3m      0
+      4      1.04       132.8       129m       132m     29.0m     31.3m      0
+     16      2.70       345.2       205m       208m     44.2m     47.2m      0
+     32      3.65       466.9       307m       310m     66.2m     68.3m      0
 
-  peak throughput at concurrency 32: 1420 output tok/s, TTFT p99 209ms
-  versus concurrency 1: 7.1x the throughput for 5.0x the TTFT p99
-  load shedding begins at concurrency 32 (91 rejected)
+  peak throughput at concurrency 32: 467 output tok/s, TTFT p99 310ms
+  versus concurrency 1: 12.2x the throughput for 2.8x the TTFT p99
 ```
 
 *(Numbers from the bundled simulator, not from a GPU — they illustrate the
 shape. Point it at a real server for numbers about your hardware.)*
 
-That table is the whole point. Throughput rises 7x; the latency a user
-experiences gets 5x worse; past 16 the throughput gain has nearly stopped while
-the latency cost has not. Somewhere between 16 and 32 is your operating point,
-and no single-number benchmark can tell you where.
+That table is the whole point. Throughput rises 12x and TTFT p99 under 3x --
+but the gain is not evenly distributed. Concurrency 1 to 16 buys 9x the
+throughput; 16 to 32 buys another 1.35x while adding 100ms of TTFT and half
+again on every user's reading speed. The knee is around 16, and no
+single-number benchmark can tell you that.
+
+The `503s` column is zero throughout because the simulator holds 32 concurrent
+sequences and this sweep stops exactly at that limit. Add a level past what
+your server can hold and the column fills in -- that is the real capacity, and
+it is what the gateway's `--max-concurrency` should be set near.
 
 ## The three latencies
 
