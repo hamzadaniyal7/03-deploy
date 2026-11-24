@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "selfserve"
+version = "0.1.0"
+description = "Serve an open model yourself: capacity maths, a gateway that sheds load, and a benchmark that reports the numbers that matter."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Hamza Daniyal" }]
+keywords = ["vllm", "sglang", "llm", "inference", "serving", "benchmark", "gateway", "kv-cache"]
+
+# No dependencies. The client speaks HTTP and parses SSE with the standard
+# library, which is the whole point of an OpenAI-compatible API -- see
+# docs/05-decisions.md.
+dependencies = []
+
+[project.optional-dependencies]
+# The gateway and the mock backend run on the stdlib HTTP server by default.
+# uvicorn is only needed if you want to run them under ASGI in production.
+asgi = ["uvicorn[standard]>=0.30"]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[project.scripts]
+selfserve = "selfserve.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/hamzadaniyal7/03-deploy"
+Documentation = "https://github.com/hamzadaniyal7/03-deploy/tree/main/docs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/selfserve"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["B008"]

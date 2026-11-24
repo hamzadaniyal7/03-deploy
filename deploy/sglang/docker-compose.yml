@@ -1,0 +1,45 @@
+# SGLang, the same model, the same OpenAI-compatible API.
+#
+#   docker compose up
+#   selfserve probe http://localhost:8000
+#
+# Worth running against the same `selfserve bench --sweep` as the vLLM compose
+# next door: both serve the same endpoint, so the comparison is one URL change,
+# and which one wins depends on your workload rather than on a blog post.
+# SGLang's RadixAttention tends to show up well on many-short-requests traffic
+# with shared prefixes; vLLM is the more widely deployed of the two.
+services:
+  sglang:
+    image: lmsysorg/sglang:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - ${HF_HOME:-~/.cache/huggingface}:/root/.cache/huggingface
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+    command: >
+      python3 -m sglang.launch_server
+      --model-path ${MODEL:-meta-llama/Llama-3.1-8B-Instruct}
+      --served-model-name ${SERVED_NAME:-default}
+      --host 0.0.0.0
+      --port 8000
+      --mem-fraction-static ${MEM_FRACTION:-0.90}
+      --context-length ${MAX_MODEL_LEN:-8192}
+      --tp-size ${TP_SIZE:-1}
+      --max-running-requests ${MAX_RUNNING:-256}
+    ipc: host
+    shm_size: "8gb"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${GPU_COUNT:-1}
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 600s
+    restart: unless-stopped

@@ -1,0 +1,80 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: pip install -e '.[dev]'
+
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+
+      # No GPU, no API key, no network. The simulated backend serves real HTTP
+      # over real sockets, so the suite exercises SSE framing, concurrency and
+      # timing rather than mocking the layer under test.
+      - name: Test
+        run: pytest -q
+
+      # Capacity planning is pure arithmetic and must work with nothing running.
+      - name: Smoke-test capacity planning
+        run: |
+          selfserve fit --list
+          selfserve fit llama-3.1-8b --gpu a100-80 --context 8192 --json
+          # Exits non-zero when it does not fit, which is what a deploy script checks.
+          ! selfserve fit llama-3.1-70b --gpu a10g
+
+      - name: Smoke-test the full path against the simulated backend
+        run: |
+          selfserve mock --port 8000 &
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:8000/health > /dev/null && break
+            sleep 0.5
+          done
+          selfserve probe http://localhost:8000
+          selfserve bench http://localhost:8000 -c 4 -n 8 --max-tokens 8 --no-save
+          selfserve bench http://localhost:8000 --sweep 1,4 -n 8 --max-tokens 4 --no-save
+
+      - name: Smoke-test the gateway in front of it
+        run: |
+          selfserve mock --port 8001 &
+          selfserve gateway --backends http://localhost:8001 --port 8080 &
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:8080/health > /dev/null && break
+            sleep 0.5
+          done
+          selfserve probe http://localhost:8080
+          curl -sf http://localhost:8080/status | head -c 400
+
+  compose:
+    # The deployment files are the deliverable for anyone with a GPU, so a
+    # syntax error in them is a real break even though CI cannot run them.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate the compose files
+        run: |
+          for f in deploy/vllm/docker-compose.yml \
+                   deploy/sglang/docker-compose.yml \
+                   deploy/docker-compose.gateway.yml; do
+            echo "checking $f"
+            docker compose -f "$f" config --quiet
+          done

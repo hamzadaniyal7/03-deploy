@@ -1,0 +1,70 @@
+# vLLM, one model, one node.
+#
+#   docker compose up
+#   selfserve probe http://localhost:8000
+#
+# Run `selfserve fit <model> --gpu <gpu>` BEFORE this. Every flag below that
+# matters is a number that command gives you, and the failure mode of guessing
+# is a CUDA OOM several minutes into startup.
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      # Cache weights on the host. Without this every container restart
+      # re-downloads the model, which for a 70B is most of an hour.
+      - ${HF_HOME:-~/.cache/huggingface}:/root/.cache/huggingface
+    environment:
+      # Needed for gated repos (Llama, among others). Unset is fine otherwise.
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+    command:
+      - --model=${MODEL:-meta-llama/Llama-3.1-8B-Instruct}
+      - --served-model-name=${SERVED_NAME:-default}
+
+      # --- the two flags that decide whether this works -------------------
+      # Fraction of the card vLLM may take. Whatever is left after weights
+      # becomes KV cache. 0.90 leaves room for fragmentation; above ~0.95 you
+      # are trading your safety margin for a little more batch.
+      - --gpu-memory-utilization=${GPU_MEMORY_UTILIZATION:-0.90}
+      # The real capacity lever. vLLM reserves KV for this many tokens per
+      # sequence, so asking for 128k when your traffic uses 4k cuts the
+      # number of concurrent requests you can serve by about thirty times.
+      # Set it to what you actually serve, not to what the model supports.
+      - --max-model-len=${MAX_MODEL_LEN:-8192}
+
+      # --- parallelism -----------------------------------------------------
+      # Tensor parallel splits each layer across GPUs. The model's KV head
+      # count must be divisible by this (`selfserve fit` warns when it is not).
+      - --tensor-parallel-size=${TP_SIZE:-1}
+
+      # --- throughput ------------------------------------------------------
+      # Upper bound on sequences in a batch. The scheduler will use fewer when
+      # KV runs short; this stops one burst from evicting everything.
+      - --max-num-seqs=${MAX_NUM_SEQS:-256}
+      # Reuse the KV of shared prefixes across requests. A large free win for
+      # anything with a long fixed system prompt, and close to free otherwise.
+      - --enable-prefix-caching
+
+      # --- operations ------------------------------------------------------
+      - --disable-log-requests          # prompts are user data; do not log them by default
+      - --host=0.0.0.0
+      - --port=8000
+    ipc: host                            # vLLM uses shared memory between workers
+    shm_size: "8gb"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${GPU_COUNT:-1}
+              capabilities: [gpu]
+    healthcheck:
+      # The model takes minutes to load; start_period keeps the container from
+      # being killed as unhealthy while it is still legitimately starting.
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 600s
+    restart: unless-stopped

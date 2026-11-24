@@ -1,0 +1,59 @@
+# Two vLLM replicas behind the selfserve gateway.
+#
+#   docker compose -f docker-compose.gateway.yml up
+#   selfserve bench http://localhost:8080 --sweep 1,8,32,64
+#
+# The gateway adds what the engines deliberately do not: authentication,
+# admission control across the whole deployment, least-outstanding routing,
+# circuit breaking, and token accounting per request.
+x-vllm: &vllm
+  image: vllm/vllm-openai:latest
+  volumes:
+    - ${HF_HOME:-~/.cache/huggingface}:/root/.cache/huggingface
+  environment:
+    HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+  command:
+    - --model=${MODEL:-meta-llama/Llama-3.1-8B-Instruct}
+    - --served-model-name=default
+    - --gpu-memory-utilization=0.90
+    - --max-model-len=${MAX_MODEL_LEN:-8192}
+    - --enable-prefix-caching
+    - --disable-log-requests
+    - --host=0.0.0.0
+    - --port=8000
+  ipc: host
+  shm_size: "8gb"
+  restart: unless-stopped
+
+services:
+  vllm-a:
+    <<: *vllm
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, device_ids: ["0"], capabilities: [gpu]}]
+
+  vllm-b:
+    <<: *vllm
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, device_ids: ["1"], capabilities: [gpu]}]
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      SELFSERVE_BACKENDS: "http://vllm-a:8000,http://vllm-b:8000"
+      SELFSERVE_HOST: "0.0.0.0"
+      SELFSERVE_PORT: "8080"
+      # Across BOTH replicas. Size it from `selfserve fit`: roughly the number
+      # of concurrent sequences each replica can hold, times the replica count.
+      SELFSERVE_MAX_CONCURRENCY: "${MAX_CONCURRENCY:-64}"
+      SELFSERVE_QUEUE_LIMIT: "${QUEUE_LIMIT:-128}"
+      SELFSERVE_API_KEY: "${SELFSERVE_API_KEY:-}"
+    depends_on: [vllm-a, vllm-b]
+    restart: unless-stopped
