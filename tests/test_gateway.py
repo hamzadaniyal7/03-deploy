@@ -65,13 +65,17 @@ def test_a_completed_stream_counts_as_a_success(gateway: Gateway) -> None:
     client = InferenceClient(gateway.url)
     for _ in range(3):
         client.chat(ChatRequest.of("hi", max_tokens=2))
+    # The client returns the moment it reads [DONE]; the gateway thread still
+    # has to unwind, record the outcome and release its slot. Every assertion
+    # about those counters has to come after they have caught up -- an earlier
+    # version of this test settled only on in_flight, *after* asserting the
+    # request count, so the count itself was still a race and CI duly failed
+    # it with `assert 2 == 3`.
+    assert _settles(gateway, lambda s: s["backends"][0]["requests"] == 3)
+    assert _settles(gateway, lambda s: s["backends"][0]["in_flight"] == 0)
     snapshot = gateway.status()["backends"][0]
     assert snapshot["requests"] == 3
     assert snapshot["failures"] == 0
-    # The client returns the moment it reads [DONE]; the gateway thread still
-    # has to unwind and release its slot. Waiting for that is the test being
-    # honest about an asynchrony that is real, not a flake to paper over.
-    assert _settles(gateway, lambda s: s["backends"][0]["in_flight"] == 0)
 
 
 def test_token_accounting_comes_from_the_stream(gateway: Gateway) -> None:
