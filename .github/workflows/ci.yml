@@ -31,8 +31,30 @@ jobs:
       # No GPU, no API key, no network. The simulated backend serves real HTTP
       # over real sockets, so the suite exercises SSE framing, concurrency and
       # timing rather than mocking the layer under test.
+      #
+      # The runner has two cores against a development machine's many, so it
+      # is the environment where a timing-sensitive test will fail first.
+      # Failures are surfaced as annotations rather than only in the log,
+      # because the log needs repository admin to read and an annotation does
+      # not -- which matters when the person debugging is not the owner.
       - name: Test
-        run: pytest -q
+        run: pytest -q --junitxml=junit.xml
+
+      - name: Annotate test failures
+        if: failure()
+        run: |
+          python - <<'PY'
+          import xml.etree.ElementTree as ET, pathlib, sys
+          path = pathlib.Path("junit.xml")
+          if not path.exists():
+              print("::error::pytest produced no junit.xml (it failed before running)")
+              sys.exit(0)
+          for case in ET.parse(path).getroot().iter("testcase"):
+              for bad in list(case.findall("failure")) + list(case.findall("error")):
+                  name = f"{case.get('classname')}.{case.get('name')}"
+                  msg = (bad.get("message") or "").splitlines()[:1]
+                  print(f"::error title=Test failed::{name} -- {msg[0] if msg else ''}"[:900])
+          PY
 
       # Capacity planning is pure arithmetic and must work with nothing running.
       - name: Smoke-test capacity planning

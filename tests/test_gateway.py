@@ -39,10 +39,17 @@ def test_proxies_a_streaming_request(gateway: Gateway) -> None:
 
 def test_streaming_is_passed_through_not_buffered(gateway: Gateway) -> None:
     """Buffering would turn a 200ms time-to-first-token into the full
-    generation time, which is the only property a streaming endpoint has."""
-    result = InferenceClient(gateway.url).chat(ChatRequest.of("hello", max_tokens=12))
+    generation time, which is the only property a streaming endpoint has.
+
+    Enough tokens that the margin survives a slow machine: if the response
+    were buffered, TTFT would equal total, so asserting it is under a third
+    cannot be closed by scheduling noise the way `< 0.9 x total` could on a
+    two-core runner.
+    """
+    result = InferenceClient(gateway.url).chat(ChatRequest.of("hello", max_tokens=60))
     assert result.ttft_s is not None
-    assert result.ttft_s < result.total_s * 0.9
+    assert len(result.token_times) == 60
+    assert result.ttft_s < result.total_s / 3
     assert all(gap > 0 for gap in result.inter_token_latencies)
 
 

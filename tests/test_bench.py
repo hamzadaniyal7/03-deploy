@@ -109,9 +109,17 @@ def test_a_sweep_scales_request_count_with_concurrency() -> None:
     assert len(sweep.reports[1].results) > len(sweep.reports[0].results)
 
 
-def test_concurrency_raises_throughput_and_latency_together(mock: MockServer) -> None:
-    """The trade-off the whole tool exists to show."""
-    sweep = run_sweep(config(mock.url, requests=12, concurrency=4, max_tokens=8), [1, 8])
+def test_concurrency_raises_throughput_and_latency_together() -> None:
+    """The trade-off the whole tool exists to show.
+
+    Its own slower mock rather than the shared fast one: measuring a
+    throughput ratio over thirty milliseconds is measuring scheduler noise.
+    At 5ms per token each level runs for a few hundred milliseconds, which
+    is long enough for the comparison to mean something on any machine.
+    """
+    config_slow = MockConfig(base_ttft_s=0.005, base_itl_s=0.005, batch_penalty=0.05, capacity=16)
+    with MockServer(config_slow) as server:
+        sweep = run_sweep(config(server.url, requests=16, concurrency=4, max_tokens=20), [1, 8])
     low, high = sweep.reports
     assert high.output_tokens_per_second > low.output_tokens_per_second
     assert high.ttft().p99 >= low.ttft().p99
